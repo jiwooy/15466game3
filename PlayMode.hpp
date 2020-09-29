@@ -24,6 +24,7 @@ struct PlayMode : Mode {
 	virtual bool block_bounds(glm::vec2 move);
 	virtual void obtain_generator();
 	virtual void player_die();
+	virtual void bad_ai(float elapsed); 
 
 	//----- game state -----
 	Scene::Transform *player = nullptr;
@@ -34,6 +35,12 @@ struct PlayMode : Mode {
 	float recovery_timer = 0.0f;
 	bool penalty = false;
 	bool die = false;
+	float update_timer = 0.0f;
+	float update_interval = 1.5f;
+	float damage_timer = 0.0f;
+	float damage_interval = 2.0f;
+	uint8_t health = 4;
+	glm::vec3 player_chase;
 
 	std::vector<Scene::Drawable *> blocks;
 	std::vector<Scene::Drawable *> generators;
@@ -51,6 +58,7 @@ struct PlayMode : Mode {
 	std::shared_ptr< Sound::PlayingSample > enemy_sound;
 	std::shared_ptr< Sound::PlayingSample > tired_sound = nullptr;
 	std::shared_ptr< Sound::PlayingSample > got_generator;
+	std::shared_ptr< Sound::PlayingSample > damaged_sound;
 	std::vector<std::shared_ptr< Sound::PlayingSample >> gen_sounds;
 	
 	//camera:

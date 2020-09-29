@@ -52,8 +52,15 @@ Load< Sound::Sample > got_item(LoadTagDefault, []() -> Sound::Sample const * {
 	return new Sound::Sample(data_path("got_item.wav"));
 });
 
+Load< Sound::Sample > hit1(LoadTagDefault, []() -> Sound::Sample const * {
+	return new Sound::Sample(data_path("damage1.wav"));
+});
+
+Load< Sound::Sample > hit2(LoadTagDefault, []() -> Sound::Sample const * {
+	return new Sound::Sample(data_path("damage2.wav"));
+});
+
 void PlayMode::init_maze(int setting) {
-	printf("init maze... ");
 	uint8_t arr[10][10] {
 	{0, 2, 1, 0, 1, 1, 2, 1, 1, 1},
 	{0, 1, 1, 0, 1, 0, 0, 0, 0, 0},
@@ -100,7 +107,7 @@ void PlayMode::init_maze(int setting) {
 				new_gen->transform = t;
 				scene.drawables.emplace_back(*new_gen);
 				generators.push_back(new_gen);
-				std::shared_ptr< Sound::PlayingSample > gen = Sound::loop_3D(*gen_sound, 10.0f, t->position, 0.01f);
+				std::shared_ptr< Sound::PlayingSample > gen = Sound::loop_3D(*gen_sound, 10.0f, t->position, 0.05f);
 				gen_sounds.push_back(gen);
 			}
 		}
@@ -112,6 +119,7 @@ PlayMode::PlayMode() : scene(*hexapod_scene) {
 	for (auto drawable : scene.drawables) {
 		if (drawable.transform->name == "Sphere") {
 			player = drawable.transform;
+			player_chase = player->position;
 		} else if (drawable.transform->name == "Block") {
 			block = &drawable;
 			init_maze(1);
@@ -120,6 +128,7 @@ PlayMode::PlayMode() : scene(*hexapod_scene) {
 			init_maze(2);
 		} else if (drawable.transform->name == "Cylinder") {
 			enemy = drawable.transform;
+			enemy->position[2] = 10.0f;
 		}
 	}
 
@@ -191,30 +200,38 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			space.pressed = false;
 			return true;
 		}
-	} else if (evt.type == SDL_MOUSEBUTTONDOWN) {
-		if (SDL_GetRelativeMouseMode() == SDL_FALSE) {
-			SDL_SetRelativeMouseMode(SDL_TRUE);
-			return true;
-		}
-	} else if (evt.type == SDL_MOUSEMOTION) {
-		if (SDL_GetRelativeMouseMode() == SDL_TRUE) {
-			glm::vec2 motion = glm::vec2(
-				evt.motion.xrel / float(window_size.y),
-				-evt.motion.yrel / float(window_size.y)
-			);
-			camera->transform->rotation = glm::normalize(
-				camera->transform->rotation
-				* glm::angleAxis(-motion.x * camera->fovy, glm::vec3(0.0f, 1.0f, 0.0f))
-				* glm::angleAxis(motion.y * camera->fovy, glm::vec3(1.0f, 0.0f, 0.0f))
-			);
-			return true;
-		}
 	}
+	// } else if (evt.type == SDL_MOUSEBUTTONDOWN) {
+	// 	if (SDL_GetRelativeMouseMode() == SDL_FALSE) {
+	// 		SDL_SetRelativeMouseMode(SDL_TRUE);
+	// 		return true;
+	// 	}
+	// } else if (evt.type == SDL_MOUSEMOTION) {
+	// 	if (SDL_GetRelativeMouseMode() == SDL_TRUE) {
+	// 		glm::vec2 motion = glm::vec2(
+	// 			evt.motion.xrel / float(window_size.y),
+	// 			-evt.motion.yrel / float(window_size.y)
+	// 		);
+	// 		camera->transform->rotation = glm::normalize(
+	// 			camera->transform->rotation
+	// 			* glm::angleAxis(-motion.x * camera->fovy, glm::vec3(0.0f, 1.0f, 0.0f))
+	// 			* glm::angleAxis(motion.y * camera->fovy, glm::vec3(1.0f, 0.0f, 0.0f))
+	// 		);
+	// 		return true;
+	// 	}
+	// }
 
 	return false;
 }
 
 void PlayMode::update(float elapsed) {
+	if (die || generators.size() == 0) {
+		for (size_t i = 0; i < generators.size(); i++) {
+			gen_sounds[i].get()->stop();
+		}
+		enemy_sound.get()->stop();
+		return;
+	}
 
 	//move camera:
 	{
@@ -240,13 +257,15 @@ void PlayMode::update(float elapsed) {
 			}
 			else {
 				recovery_timer += elapsed;
+				PlayerSpeed /= 1.5f;
 				if (recovery_timer >= 5.0f) {
 					recovery_timer = 0.0f;
 					penalty = false;
+					sprint = 50.0f;
 				}
 			}
 		}
-		if (sprint <= 15.0f) {
+		if (sprint <= 30.0f) {
 			if (tired_sound != nullptr && tired_sound.get()->stopped) tired_sound = Sound::play(*tired, 0.7f, 0.0f);
 			if (tired_sound == nullptr) tired_sound = Sound::play(*tired, 0.7f, 0.0f);
 		}
@@ -266,6 +285,18 @@ void PlayMode::update(float elapsed) {
 		camera->transform->position[0] = player->position[0];
 		camera->transform->position[1] = player->position[1];
 		obtain_generator();
+
+		update_timer += elapsed;
+		damage_timer += elapsed;
+		if (update_timer >= update_interval) {
+			update_interval += 1.5f;
+			player_chase = player->position;
+		}
+		bad_ai(elapsed);
+
+		if (damage_timer > damage_interval) {
+			player_die();
+		}
 	}
 
 	{ //update listener to camera position:
@@ -330,30 +361,61 @@ void PlayMode::player_die() {
 		std::min(player->position[0] + 1.5f, enemy->position[0] + 1.5f) &&
 		std::max(player->position[1] - 1.5f, enemy->position[1] - 1.5f) <= 
 		std::min(player->position[1] + 1.5f, enemy->position[1] + 1.5f)) {
-		die = true;
+		if (health > 2) {
+			damaged_sound = Sound::play(*hit1, 0.7f, 0.0f);
+		} else {
+			damaged_sound = Sound::play(*hit2, 0.7f, 0.0f);
+		}
+		health -= 1;
+		damage_interval = damage_timer + 2.0f;
+		if (health <= 0) die = true;
 	}
+}
+
+void PlayMode::bad_ai(float elapsed) {
+	float speed = 10.0f;
+	glm::vec2 move = glm::vec2(0.0f);
+	if (enemy->position[0] > player_chase[0]) {
+		move.x -= 0.5f;
+	} else if (enemy->position[0] < player_chase[0]) {
+		move.x += 0.5f;
+	}
+
+	if (enemy->position[1] > player_chase[1]) {
+		move.y -= 0.5f;
+	} else if (enemy->position[1] < player_chase[1]) {
+		move.y += 0.5f;
+	}
+	if (move != glm::vec2(0.0f)) move = glm::normalize(move) * speed * elapsed;
+	enemy->position[0] += move.x;
+	enemy->position[1] += move.y;
 }
 
 void PlayMode::draw(glm::uvec2 const &drawable_size) {
 	//update camera aspect ratio for drawable:
 	camera->aspect = float(drawable_size.x) / float(drawable_size.y);
+	constexpr float H = 0.09f;
+	float ofs = 2.0f / drawable_size.y;
 
 	//set up light type and position for lit_color_texture_program:
 	// TODO: consider using the Light(s) in the scene to do this
-	// glUseProgram(lit_color_texture_program->program);
-	// glUniform1i(lit_color_texture_program->LIGHT_TYPE_int, 2);
-	// glUniform3fv(lit_color_texture_program->LIGHT_LOCATION_vec3, 1,
-	// glm::value_ptr(glm::vec3(player->position[0], player->position[1], 20.0f)));
-	// glUniform3fv(lit_color_texture_program->LIGHT_DIRECTION_vec3, 1,
-	// glm::value_ptr(glm::vec3(0.0f, 0.0f,-1.0f)));
-	// glUniform1f(lit_color_texture_program->LIGHT_CUTOFF_float,
-	// std::cos(3.1415926f * 0.125f));
-	// glUniform3fv(lit_color_texture_program->LIGHT_ENERGY_vec3, 1,
-	// glm::value_ptr(200.0f * glm::vec3(1.0f, 1.0f, 0.95f)));
 	glUseProgram(lit_color_texture_program->program);
-	glUniform1i(lit_color_texture_program->LIGHT_TYPE_int, 1);
-	glUniform3fv(lit_color_texture_program->LIGHT_DIRECTION_vec3, 1, glm::value_ptr(glm::vec3(0.0f, 0.0f,-1.0f)));
-	glUniform3fv(lit_color_texture_program->LIGHT_ENERGY_vec3, 1, glm::value_ptr(glm::vec3(1.0f, 1.0f, 0.95f)));
+	if (generators.size() > 0) {
+		glUniform1i(lit_color_texture_program->LIGHT_TYPE_int, 2);
+		glUniform3fv(lit_color_texture_program->LIGHT_LOCATION_vec3, 1,
+		glm::value_ptr(glm::vec3(player->position[0], player->position[1], 20.0f)));
+		glUniform3fv(lit_color_texture_program->LIGHT_DIRECTION_vec3, 1,
+		glm::value_ptr(glm::vec3(0.0f, 0.0f,-1.0f)));
+		glUniform1f(lit_color_texture_program->LIGHT_CUTOFF_float,
+		std::cos(3.1415926f * 0.125f));
+		glUniform3fv(lit_color_texture_program->LIGHT_ENERGY_vec3, 1,
+		glm::value_ptr(200.0f * glm::vec3(1.0f, 1.0f, 0.95f)));
+	}
+	else {
+		glUniform1i(lit_color_texture_program->LIGHT_TYPE_int, 1);
+		glUniform3fv(lit_color_texture_program->LIGHT_DIRECTION_vec3, 1, glm::value_ptr(glm::vec3(0.0f, 0.0f,-1.0f)));
+		glUniform3fv(lit_color_texture_program->LIGHT_ENERGY_vec3, 1, glm::value_ptr(glm::vec3(1.0f, 1.0f, 0.95f)));
+	}
 	glUseProgram(0);
 
 	glClearColor(0.5f, 0.5f, 0.5f, 1.0f);
@@ -374,16 +436,37 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 			0.0f, 0.0f, 1.0f, 0.0f,
 			0.0f, 0.0f, 0.0f, 1.0f
 		));
+		if (generators.size() == 0) {
+			lines.draw_text("You turned on the lights!",
+				glm::vec3(-aspect / 5.5f, 0.0f, 0.0),
+				glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
+				glm::u8vec4(0x00, 0x00, 0x00, 0x00));
+			lines.draw_text("You turned on the lights!",
+				glm::vec3(-aspect / 5.5f + ofs, ofs, 0.0),
+				glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
+				glm::u8vec4(0xff, 0xff, 0xff, 0x00));
+		}
 
-		constexpr float H = 0.09f;
-		lines.draw_text("Mouse motion rotates camera; WASD moves; escape ungrabs mouse",
-			glm::vec3(-aspect + 0.1f * H, -1.0 + 0.1f * H, 0.0),
-			glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
-			glm::u8vec4(0x00, 0x00, 0x00, 0x00));
-		float ofs = 2.0f / drawable_size.y;
-		lines.draw_text("Mouse motion rotates camera; WASD moves; escape ungrabs mouse",
-			glm::vec3(-aspect + 0.1f * H + ofs, -1.0 + + 0.1f * H + ofs, 0.0),
-			glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
-			glm::u8vec4(0xff, 0xff, 0xff, 0x00));
+		if (!die) {
+			std::string txt = "Generators found: " + std::to_string(6 - generators.size()) + "/" + std::to_string(6);
+			
+			lines.draw_text(txt,
+				glm::vec3(-aspect + 0.1f * H, -1.0 + 0.1f * H, 0.0),
+				glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
+				glm::u8vec4(0x00, 0x00, 0x00, 0x00));	
+			lines.draw_text(txt,
+				glm::vec3(-aspect + 0.1f * H + ofs, -1.0 + 0.1f * H + ofs, 0.0),
+				glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
+				glm::u8vec4(0xff, 0xff, 0xff, 0x00));
+		} else {
+			lines.draw_text("Game Over!",
+				glm::vec3(-aspect / 5.5f, 0.0f, 0.0),
+				glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
+				glm::u8vec4(0x00, 0x00, 0x00, 0x00));
+			lines.draw_text("Game Over!",
+				glm::vec3(-aspect / 5.5f + ofs, ofs, 0.0),
+				glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
+				glm::u8vec4(0xff, 0xff, 0xff, 0x00));
+		}
 	}
 }
