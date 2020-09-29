@@ -5,7 +5,7 @@ Author: Jiwoo Yoo
 Design: You're trapped in a dark maze, and all you want to do is turn on the lights.
 But there's some one else in the maze too, and they don't want the lights on. Find
 all the generators before they get you. Luckily, neither they nor the generators are
-very quiet...
+very quiet... If you hear the wind chimes, they're close.
 
 Screen Shot:
 
